@@ -100,12 +100,15 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
     // Draw Grid
     drawGrid(ctx);
     
-    // Calculate transformations
-    // Data usually has (0,0) at top-left, but inverted Y sometimes. 
-    // Based on '举' data, Y ranges from -70 to 800+. 
-    // Standard HanziWriter/MakeMeAHanzi data usually fits in 1024x1024.
-    // Let's render as is first. "M 304 668" means x=304, y=668.
-    // This renders correctly in standard 2D context without inversion.
+    // Save context before transforming for character rendering
+    ctx.save();
+    
+    // TRANSFORMATION:
+    // The data usually follows Cartesian coordinates (Y up), while Canvas is Y down.
+    // The standard offset for this data format (e.g., MakeMeAHanzi) is usually 900.
+    // We translate to the bottom and flip the Y axis.
+    ctx.translate(0, 900);
+    ctx.scale(1, -1);
 
     // Drawing Settings
     ctx.lineCap = 'round';
@@ -240,6 +243,9 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
       }
 
     });
+    
+    // Restore context to remove transform
+    ctx.restore();
     
     if (isPlaying) {
         reqIdRef.current = requestAnimationFrame(renderFrame);
