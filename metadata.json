@@ -1,0 +1,5 @@
+{
+  "name": "Hanzi Zen - Character Visualization",
+  "description": "An interactive visualization of Chinese characters using Canvas and SVG data, featuring stroke-order animation and structural skeleton analysis.",
+  "requestFramePermissions": []
+}
