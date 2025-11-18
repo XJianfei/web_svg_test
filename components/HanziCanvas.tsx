@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import { HanziData, AnimationConfig } from '../types';
 
@@ -6,6 +7,7 @@ interface HanziCanvasProps {
   config: AnimationConfig;
   isPlaying: boolean;
   onAnimationEnd: () => void;
+  onCanvasClick?: (x: number, y: number) => void;
 }
 
 // Helper to get distance between points
@@ -40,7 +42,7 @@ const getPointAtLength = (points: number[][], targetLen: number) => {
   return points[points.length - 1];
 };
 
-const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAnimationEnd }) => {
+const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAnimationEnd, onCanvasClick }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [activeStrokeIndex, setActiveStrokeIndex] = useState(-1);
   
@@ -49,8 +51,9 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
   const reqIdRef = useRef<number | null>(null);
   
   // Canvas size constants
-  const CANVAS_SIZE = 1024; // The data coordinate system is roughly 1024x1024
-  const VIEW_SIZE = 400; // Display size in pixels
+  const CANVAS_SIZE = 1024; 
+  const VIEW_SIZE = 400; 
+  const DATA_Y_OFFSET = 900;
 
   // Draw background grid (Tian Zi Ge)
   const drawGrid = (ctx: CanvasRenderingContext2D) => {
@@ -104,23 +107,15 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
     ctx.save();
     
     // TRANSFORMATION:
-    // The data usually follows Cartesian coordinates (Y up), while Canvas is Y down.
-    // The standard offset for this data format (e.g., MakeMeAHanzi) is usually 900.
-    // We translate to the bottom and flip the Y axis.
-    ctx.translate(0, 900);
+    ctx.translate(0, DATA_Y_OFFSET);
     ctx.scale(1, -1);
 
     // Drawing Settings
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // LOGIC:
-    // 1. If not playing, just draw everything based on config.
-    // 2. If playing, determine which stroke is active based on time.
-    
-    // Calculate total duration of all strokes to map time -> stroke
-    // We'll assign a duration per stroke based on its median length
-    const STROKE_SPEED = 0.6 / config.speed; // Base ms per unit length, modulated by speed
+    // Calculate total duration
+    const STROKE_SPEED = 0.6 / config.speed;
     
     let cumulativeTime = 0;
     const strokeTimings = data.medians.map(median => {
@@ -141,7 +136,7 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
             currentAnimTime = 0;
         } else {
             currentAnimTime = totalDuration;
-            if (isPlaying) onAnimationEnd(); // Trigger stop
+            if (isPlaying) onAnimationEnd();
         }
     }
 
@@ -151,8 +146,7 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
       const path = new Path2D(strokePathStr);
       const median = data.medians[index];
 
-      // Determine state of this stroke
-      let progress = 0; // 0 to 1
+      let progress = 0;
       
       if (isPlaying) {
         if (currentAnimTime >= timing.end) {
@@ -164,39 +158,30 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
           progress = 0;
         }
       } else {
-        // Not playing = show full character
         progress = 1; 
         setActiveStrokeIndex(-1);
       }
 
-      // DRAWING LOGIC
-      
-      // 1. Draw Outline (Ghost) if enabled and progress is 0
+      // 1. Draw Outline (Ghost)
       if (config.showOutline && progress < 1) {
         ctx.save();
-        ctx.fillStyle = '#e5e7eb'; // Very light gray
+        ctx.fillStyle = '#e5e7eb';
         ctx.fill(path);
         ctx.restore();
       }
 
-      // 2. Draw Filled Stroke (Masked by median progress)
+      // 2. Draw Filled Stroke
       if (progress > 0) {
         ctx.save();
-        
-        // CLIP to the shape of the stroke
         ctx.clip(path);
-
-        // Draw a very thick line along the median up to progress
         const targetLen = timing.length * progress;
-        
         ctx.beginPath();
         let currentLen = 0;
-        if (median.length > 0) {
+        if (median && median.length > 0) {
           ctx.moveTo(median[0][0], median[0][1]);
           for (let i = 0; i < median.length - 1; i++) {
             const segmentLen = getDistance(median[i], median[i+1]);
             if (currentLen + segmentLen > targetLen) {
-              // Partial segment
               const [tx, ty] = getPointAtLength(median, targetLen);
               ctx.lineTo(tx, ty);
               break;
@@ -205,46 +190,38 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
               currentLen += segmentLen;
             }
           }
-          // Check for last point if full
-           if (progress >= 1) {
+           if (progress >= 1 && median.length > 0) {
               ctx.lineTo(median[median.length-1][0], median[median.length-1][1]);
            }
         }
-        
-        // Stroke Style for the fill
-        ctx.strokeStyle = '#1f2937'; // Dark gray / Black
-        ctx.lineWidth = 140; // Large enough to cover the outline width
+        ctx.strokeStyle = '#1f2937';
+        ctx.lineWidth = 140;
         ctx.stroke();
-        
         ctx.restore();
       }
 
-      // 3. Draw Median (Skeleton) if enabled
-      if (config.showMedians) {
+      // 3. Draw Median
+      if (config.showMedians && median) {
         ctx.save();
         ctx.beginPath();
-        ctx.strokeStyle = index === activeStrokeIndex ? '#ef4444' : '#3b82f6'; // Red if active, Blue otherwise
+        ctx.strokeStyle = index === activeStrokeIndex ? '#ef4444' : '#3b82f6';
         ctx.lineWidth = 4;
         median.forEach((pt, i) => {
           if (i === 0) ctx.moveTo(pt[0], pt[1]);
           else ctx.lineTo(pt[0], pt[1]);
         });
         ctx.stroke();
-        
-        // Draw points
         ctx.fillStyle = '#ef4444';
         median.forEach((pt) => {
             ctx.beginPath();
             ctx.arc(pt[0], pt[1], 6, 0, Math.PI * 2);
             ctx.fill();
         });
-
         ctx.restore();
       }
 
     });
     
-    // Restore context to remove transform
     ctx.restore();
     
     if (isPlaying) {
@@ -252,26 +229,44 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
     }
   };
 
-  // Reset animation time when play status changes to true
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!onCanvasClick || !canvasRef.current) return;
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+    
+    // Map client coordinates (0..clientWidth, 0..clientHeight) to (0..1024, 0..1024)
+    // NOTE: internal canvas width is 1024.
+    const scaleX = CANVAS_SIZE / rect.width;
+    const scaleY = CANVAS_SIZE / rect.height;
+    
+    const canvasX = clientX * scaleX;
+    const canvasY = clientY * scaleY;
+
+    // Map to Data Coordinate Space (flipped Y, translated)
+    // Transform was: translate(0, 900), scale(1, -1)
+    // y_canvas = 900 - y_data * 1  => y_data = 900 - y_canvas
+    const dataX = canvasX;
+    const dataY = DATA_Y_OFFSET - canvasY;
+
+    onCanvasClick(dataX, dataY);
+  };
+
   useEffect(() => {
     if (isPlaying) {
       startTimeRef.current = null;
       reqIdRef.current = requestAnimationFrame(renderFrame);
     } else {
-      // Trigger one render to show final state or static state
       reqIdRef.current = requestAnimationFrame(renderFrame);
     }
-    
     return () => {
       if (reqIdRef.current) cancelAnimationFrame(reqIdRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, config]); // Re-render if config changes
+  }, [isPlaying, config, data]);
 
-  // Initial Render
   useEffect(() => {
      reqIdRef.current = requestAnimationFrame(renderFrame);
-     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -281,8 +276,8 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
         width={CANVAS_SIZE}
         height={CANVAS_SIZE}
         style={{ width: '100%', maxWidth: `${VIEW_SIZE}px`, height: 'auto', display: 'block', margin: '0 auto' }}
-        className="cursor-pointer"
-        onClick={() => !isPlaying && (startTimeRef.current = null)}
+        className="cursor-crosshair active:cursor-none"
+        onClick={handleClick}
       />
     </div>
   );
