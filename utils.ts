@@ -100,8 +100,8 @@ export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
   return points;
 }
 
-// Find intersection of a line segment and a circle
-function getIntersection(p1: Point, p2: Point, cx: number, cy: number, r: number): Point {
+// Find intersection of a line segment and a circle (Binary Search variant - used for polygons)
+function getIntersectionBinary(p1: Point, p2: Point, cx: number, cy: number, r: number): Point {
     const d = dist(p1, p2);
     if (d === 0) return p1;
     const v = { x: (p2.x - p1.x)/d, y: (p2.y - p1.y)/d };
@@ -113,8 +113,6 @@ function getIntersection(p1: Point, p2: Point, cx: number, cy: number, r: number
         const mid = (start+end)/2;
         const testPt = { x: p1.x + v.x*mid, y: p1.y + v.y*mid };
         if (dist(testPt, {x:cx, y:cy}) < r) {
-            // Mid is inside, we need to move towards the outside point
-            // Assumption: one point is In, one is Out.
             if (dist(p1, {x:cx, y:cy}) < r) start = mid; else end = mid;
         } else {
             if (dist(p1, {x:cx, y:cy}) < r) end = mid; else start = mid;
@@ -124,6 +122,32 @@ function getIntersection(p1: Point, p2: Point, cx: number, cy: number, r: number
     return { x: p1.x + v.x*finalMid, y: p1.y + v.y*finalMid };
 }
 
+// Analytical intersection for line segment (p1-p2) and circle (cx, cy, r)
+// Returns sorted t values (0 < t < 1)
+function getSegmentCircleIntersections(p1: Point, p2: Point, cx: number, cy: number, r: number): number[] {
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const fx = p1.x - cx;
+    const fy = p1.y - cy;
+    
+    const a = dx*dx + dy*dy;
+    const b = 2 * (fx*dx + fy*dy);
+    const c = (fx*fx + fy*fy) - r*r;
+    
+    const delta = b*b - 4*a*c;
+    
+    if (delta < 0) return [];
+    
+    const t1 = (-b - Math.sqrt(delta)) / (2*a);
+    const t2 = (-b + Math.sqrt(delta)) / (2*a);
+    
+    const result: number[] = [];
+    if (t1 > 0.001 && t1 < 0.999) result.push(t1);
+    if (t2 > 0.001 && t2 < 0.999) result.push(t2);
+    
+    return result.sort((a,b) => a-b);
+}
+
 // Split a list of points (Polygon/Stroke Outline) by a circle
 export function splitPolygon(points: Point[], cx: number, cy: number, r: number): { path: string, points: Point[] }[] {
     if (points.length < 3) return [];
@@ -131,18 +155,13 @@ export function splitPolygon(points: Point[], cx: number, cy: number, r: number)
     const isOut = (p: Point) => dist(p, {x:cx, y:cy}) >= r;
     const status = points.map(isOut);
 
-    // 1. All Out -> Return original
     if (status.every(s => s)) return [{ path: pointsToPath(points), points }];
-    // 2. All In -> Return nothing
     if (status.every(s => !s)) return [];
 
-    // 3. Mixed
-    // Identify continuous segments of OUT points
     const segments: Point[][] = [];
     let currentSegment: Point[] = [];
     
-    // To handle the cyclic nature, we find a rotation index where we transition In -> Out
-    // If we can't find one (handled above by all in/all out), default 0.
+    // Find start index (In -> Out transition) to correctly handle loop
     let startIndex = 0;
     for (let i = 0; i < points.length; i++) {
         const prevIdx = (i - 1 + points.length) % points.length;
@@ -156,7 +175,6 @@ export function splitPolygon(points: Point[], cx: number, cy: number, r: number)
     for(let i=0; i<points.length; i++) {
         orderedPoints.push(points[(startIndex + i) % points.length]);
     }
-    // Recalculate status for ordered to avoid index confusion
     const orderedStatus = orderedPoints.map(isOut);
 
     for (let i = 0; i < orderedPoints.length; i++) {
@@ -165,22 +183,18 @@ export function splitPolygon(points: Point[], cx: number, cy: number, r: number)
 
         if (out) {
             if (currentSegment.length === 0) {
-                // Start of a new segment (Transition In -> Out)
-                // Add intersection from previous (In) to current (Out)
+                // Start of new segment
                 const prevIdx = (i - 1 + orderedPoints.length) % orderedPoints.length;
                 const prev = orderedPoints[prevIdx];
-                // Safety: if i=0 and we just started, prev is the last point.
-                // Due to rotation, prev should be IN.
-                const intersect = getIntersection(prev, p, cx, cy, r);
+                const intersect = getIntersectionBinary(prev, p, cx, cy, r);
                 currentSegment.push(intersect);
             }
             currentSegment.push(p);
         } else {
             if (currentSegment.length > 0) {
-                // End of segment (Transition Out -> In)
-                // Add intersection from previous (Out) to current (In)
+                // End of segment
                 const prev = orderedPoints[i - 1];
-                const intersect = getIntersection(prev, p, cx, cy, r);
+                const intersect = getIntersectionBinary(prev, p, cx, cy, r);
                 currentSegment.push(intersect);
                 segments.push(currentSegment);
                 currentSegment = [];
@@ -188,29 +202,8 @@ export function splitPolygon(points: Point[], cx: number, cy: number, r: number)
         }
     }
     
-    // If we end with an active segment, push it (shouldn't usually happen if we rotated correctly to end on an IN, 
-    // but if the shape is complex or we hit the end of array)
     if (currentSegment.length > 0) {
-        // Check if we need to wrap intersect (only if we didn't rotate, but we did)
-        // Just close it with intersection to the start of wrap?
-        // The logic above "orderedPoints" ensures we start at IN->OUT.
-        // So the last point is either IN (segment closed) or OUT (array ended).
-        // If array ended on OUT, it means the last point connects to the first point.
-        // But we rotated so orderedPoints[0] is OUT and orderedPoints[-1] is IN.
-        // So currentSegment should be empty at the end of loop.
-        
-        // Fallback just in case
-         const firstPt = orderedPoints[0]; // The OUT point we started with
-         const lastPtIn = orderedPoints[orderedPoints.length-1]; // Should be IN?
-         // If last was OUT, then we circle back.
-         if (orderedStatus[orderedPoints.length-1]) {
-             // This means the whole thing was OUT? But we checked that.
-             // Or calculation drift.
-             segments.push(currentSegment);
-         } else {
-             // It was closed properly in the loop
-             segments.push(currentSegment);
-         }
+         segments.push(currentSegment);
     }
 
     return segments.map(pts => ({
@@ -225,58 +218,63 @@ export function pointsToPath(points: Point[]): string {
     return d + " Z";
 }
 
-// Split a polyline (Median) by a circle
+// Split a polyline (Median) by a circle using exact intersection
+// Preserves original points and only adds new ones at cut locations
 export function splitPolyline(median: number[][], cx: number, cy: number, r: number): number[][][] {
-    // 1. Subdivide to ensure good intersection
-    const rawPoints = median.map(p => ({x: p[0], y: p[1]}));
-    // Subdivide long segments to max 5px to ensure they can be caught by eraser
-    const points = subdividePolyline(rawPoints, 5);
-    
     const segments: number[][][] = [];
     let currentSegment: number[][] = [];
-    
-    for (let i = 0; i < points.length - 1; i++) {
-        const p1 = points[i];
-        const p2 = points[i+1];
-        const d1 = dist(p1, {x:cx, y:cy});
-        const d2 = dist(p2, {x:cx, y:cy});
-        
-        const out1 = d1 >= r;
-        const out2 = d2 >= r;
 
-        if (out1) {
-            if (currentSegment.length === 0) currentSegment.push([p1.x, p1.y]);
+    for (let i = 0; i < median.length - 1; i++) {
+        const p1 = { x: median[i][0], y: median[i][1] };
+        const p2 = { x: median[i+1][0], y: median[i+1][1] };
+        
+        // Find intersection t-values
+        const tValues = getSegmentCircleIntersections(p1, p2, cx, cy, r);
+        
+        // We iterate through sub-segments created by intersections
+        // [Start (0), ...Intersections, End (1)]
+        const checkPoints = [0, ...tValues, 1];
+        
+        for (let k = 0; k < checkPoints.length - 1; k++) {
+            const tStart = checkPoints[k];
+            const tEnd = checkPoints[k+1];
             
-            if (out2) {
-                // Both out, keep segment
-                currentSegment.push([p2.x, p2.y]);
+            const startPt = lerp(p1, p2, tStart);
+            const endPt = lerp(p1, p2, tEnd);
+            const midPt = lerp(p1, p2, (tStart + tEnd) / 2);
+            
+            // Check if this sub-segment is inside or outside
+            const isInside = dist(midPt, {x: cx, y: cy}) < r;
+            
+            if (!isInside) {
+                // OUTSIDE: Add to current segment
+                if (currentSegment.length === 0) {
+                    currentSegment.push([startPt.x, startPt.y]);
+                } else {
+                    // Check continuity to avoid duplicating points
+                    const last = currentSegment[currentSegment.length-1];
+                    // If startPt is effectively same as last, don't push
+                    if (dist({x:last[0], y:last[1]}, startPt) > 0.1) {
+                        currentSegment.push([startPt.x, startPt.y]);
+                    }
+                }
+                currentSegment.push([endPt.x, endPt.y]);
             } else {
-                // Out -> In
-                const intersect = getIntersection(p1, p2, cx, cy, r);
-                currentSegment.push([intersect.x, intersect.y]);
-                segments.push(currentSegment);
-                currentSegment = [];
+                // INSIDE: Cut breaks the segment
+                if (currentSegment.length > 0) {
+                    // Ensure we don't leave tiny specks
+                    if (currentSegment.length > 1 || (currentSegment.length === 2 && dist({x:currentSegment[0][0], y:currentSegment[0][1]}, {x:currentSegment[1][0], y:currentSegment[1][1]}) > 1)) {
+                         segments.push(currentSegment);
+                    }
+                    currentSegment = [];
+                }
             }
-        } else {
-            if (out2) {
-                // In -> Out
-                const intersect = getIntersection(p1, p2, cx, cy, r);
-                currentSegment.push([intersect.x, intersect.y]);
-                currentSegment.push([p2.x, p2.y]);
-            }
-            // Else both in, ignore
         }
     }
     
-    if (currentSegment.length > 0) {
-        // Filter tiny segments
-        let len = 0;
-        for(let k=0; k<currentSegment.length-1; k++) {
-            len += dist({x:currentSegment[k][0], y:currentSegment[k][1]}, {x:currentSegment[k+1][0], y:currentSegment[k+1][1]});
-        }
-        if (len > 2) {
-            segments.push(currentSegment);
-        }
+    // Push remaining segment
+    if (currentSegment.length > 1) {
+        segments.push(currentSegment);
     }
     
     return segments;
