@@ -65,7 +65,8 @@ const App: React.FC = () => {
             const splitMedians = splitPolyline(median, x, y, RADIUS);
             
             // 2. Split Outline
-            const polyPoints = flattenSVGPath(pathStr, 8); // Higher sampling for better accuracy
+            // Use lower sample rate (higher resolution) to capture small tips accurately
+            const polyPoints = flattenSVGPath(pathStr, 2); 
             const splitOutlines = splitPolygon(polyPoints, x, y, RADIUS);
 
             // Pairing Logic
@@ -109,16 +110,15 @@ const App: React.FC = () => {
                      splitMedians.forEach((m, mIdx) => {
                          if (usedMedians.has(mIdx) && splitMedians.length > splitOutlines.length) return; 
                          
-                         // Check how many points of median are inside this outline
+                         // Check all points of median against this outline
                          let insideCount = 0;
-                         // Check a few sample points
-                         const samples = [m[0], m[Math.floor(m.length/2)], m[m.length-1]];
-                         for(const pt of samples) {
+                         for(const pt of m) {
                              if (isPointInPolygon({x: pt[0], y: pt[1]}, outlineObj.points)) {
                                  insideCount++;
                              }
                          }
                          
+                         // Prioritize the median that has the most points inside this outline
                          if (insideCount > bestScore) {
                              bestScore = insideCount;
                              bestMedianIdx = mIdx;
@@ -131,17 +131,23 @@ const App: React.FC = () => {
                          usedMedians.add(bestMedianIdx);
                          hasChanged = true;
                      } else {
-                         // Outline exists but no median found inside it.
-                         // This happens if the median was erased but outline remains (hollow stroke?)
-                         // Or if the outline is a tiny sliver.
-                         // If outline is decent size, we might want to keep it with a dummy median?
-                         // For now, we skip it to avoid crashes, but this is where "disappearing" happens.
+                         // Fallback: If we have a split outline but no split median fits "inside", 
+                         // it might be a very small tip where points drift outside due to precision.
+                         // Or the median was erased but outline remains.
                          
-                         // Fallback: If 1 outline and 1 median total, just take it
-                         if (splitOutlines.length === 1 && splitMedians.length === 1) {
-                             newStrokes.push(outlineObj.path);
-                             newMedians.push(splitMedians[0]);
-                             hasChanged = true;
+                         // If we have exactly one unused median and one unmatched outline, force match
+                         if (splitOutlines.length === splitMedians.length) {
+                             // Find the unused median
+                             let unusedIdx = -1;
+                             for(let k=0; k<splitMedians.length; k++) {
+                                 if(!usedMedians.has(k)) { unusedIdx = k; break; }
+                             }
+                             if (unusedIdx !== -1) {
+                                 newStrokes.push(outlineObj.path);
+                                 newMedians.push(splitMedians[unusedIdx]);
+                                 usedMedians.add(unusedIdx);
+                                 hasChanged = true;
+                             }
                          }
                      }
                  });

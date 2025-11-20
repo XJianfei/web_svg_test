@@ -263,7 +263,8 @@ export function splitPolyline(median: number[][], cx: number, cy: number, r: num
                 // INSIDE: Cut breaks the segment
                 if (currentSegment.length > 0) {
                     // Ensure we don't leave tiny specks
-                    if (currentSegment.length > 1 || (currentSegment.length === 2 && dist({x:currentSegment[0][0], y:currentSegment[0][1]}, {x:currentSegment[1][0], y:currentSegment[1][1]}) > 1)) {
+                    // Reduced threshold to 0.1 to keep small tips
+                    if (currentSegment.length > 1 || (currentSegment.length === 2 && dist({x:currentSegment[0][0], y:currentSegment[0][1]}, {x:currentSegment[1][0], y:currentSegment[1][1]}) > 0.1)) {
                          segments.push(currentSegment);
                     }
                     currentSegment = [];
