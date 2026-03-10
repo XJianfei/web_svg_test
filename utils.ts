@@ -1,3 +1,25 @@
+// utils.ts
+
+// ============================================================================
+// 橡皮擦擦除与拆分功能核心算法说明
+// ============================================================================
+// 流程概述：
+// 1. 碰撞检测：当用户点击画布时，获取点击位置，构造一个矩形橡皮擦 (Rect)。
+// 2. 粗略筛选：遍历汉字的所有笔画，计算笔画中轴线 (Median) 与橡皮擦的距离。如果距离太远，直接跳过。
+// 3. 切断中轴线 (splitPolylineByRect)：
+//    - 遍历中轴线上的每一个线段，计算它与橡皮擦矩形四条边的交点。
+//    - 将位于矩形内部的线段删除。
+//    - 在矩形边界处生成新的端点，从而将一条中轴线切断成多条短的中轴线。
+// 4. 切断轮廓 (splitPolygonByRect)：
+//    - 将 SVG Path 转换（展平）为多边形点集 (flattenSVGPath)。
+//    - 遍历多边形的点，删除位于矩形内部的点。
+//    - 当轮廓线穿过矩形边界时，使用二分法 (getIntersectionBinary) 找到精确的交点。
+//    - 将这些交点沿着矩形边界连接起来，形成闭合的切口，从而将一个大轮廓分裂成多个小轮廓。
+// 5. 重新匹配 (eraseAt)：
+//    - 因为一个笔画被切成了多个新轮廓和多个新中轴线，我们需要将它们重新组合。
+//    - 算法通过判断“中轴线上的点是否在轮廓多边形内部”或“中轴线与轮廓质心的距离”，将新生成的中轴线分配给对应的新轮廓。
+// 6. 更新数据：将拆分后的新笔画替换掉原来的旧笔画，触发 React 重新渲染和动画。
+// ============================================================================
 
 export interface Point {
   x: number;
@@ -18,7 +40,7 @@ export function isPointInRect(p: Point, rect: Rect): boolean {
 // Calculate distance between two points
 export const dist = (p1: Point, p2: Point) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
 
-// Linear Interpolation
+// Linear Interpolation (线性插值)
 const lerp = (p1: Point, p2: Point, t: number): Point => ({
   x: p1.x + (p2.x - p1.x) * t,
   y: p1.y + (p2.y - p1.y) * t,
@@ -44,6 +66,9 @@ export function subdividePolyline(points: Point[], maxLen: number): Point[] {
 }
 
 // Ray casting algorithm to check if point is in polygon
+// 射线法判断点是否在多边形内
+// 原理：从目标点向右发出一条水平射线，统计这条射线与多边形边界的交点个数。
+// 如果交点数为奇数，则点在多边形内部；如果为偶数，则在外部。
 export function isPointInPolygon(p: Point, polygon: Point[]): boolean {
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -57,6 +82,8 @@ export function isPointInPolygon(p: Point, polygon: Point[]): boolean {
     return inside;
 }
 
+// 获取多边形的质心 (Centroid)
+// 简单地将所有顶点的坐标求平均值。用于在复杂情况下匹配轮廓和中轴线。
 export function getPolygonCentroid(points: Point[]): Point {
     let x = 0, y = 0;
     if (points.length === 0) return { x: 0, y: 0 };
@@ -65,6 +92,11 @@ export function getPolygonCentroid(points: Point[]): Point {
 }
 
 // Parse simple SVG path commands (M, L, Q, C, Z) and flatten to a dense polygon
+// 将 SVG Path 字符串展平 (Flatten) 为离散的点集。
+// 核心算法：
+// 1. 解析 SVG 指令 (M, L, Q, C, Z)。
+// 2. 根据指定的采样率 (sampleRate)，将直线和贝塞尔曲线插值成一系列密集的点。
+// 3. 这样复杂的曲线轮廓就变成了一个简单的多边形，方便后续进行几何碰撞和裁剪计算。
 export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
   const commands = d.match(/[a-zA-Z]|[\-+]?(?:\d+\.?\d*|\.?\d+)/g);
   if (!commands) return [];
@@ -143,8 +175,12 @@ export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
   return points;
 }
 
-// Find intersection of a line segment and a boundary (Binary Search variant - used for polygons)
-function getIntersectionBinary(p1: Point, p2: Point, isInside: (p: Point) => boolean): Point {
+/**
+ * 查找线段与边界的交点 (二分查找变体 - 用于处理多边形轮廓)
+ * 原理：已知线段的一个端点在矩形外，另一个在矩形内。
+ * 通过不断取中点，判断中点是否在矩形内，从而逼近线段与矩形边界的精确交点。
+ */
+export const getIntersectionBinary = (p1: Point, p2: Point, isInside: (p: Point) => boolean): Point => {
     const d = dist(p1, p2);
     if (d === 0) return p1;
     const v = { x: (p2.x - p1.x)/d, y: (p2.y - p1.y)/d };
@@ -332,6 +368,9 @@ export function splitPolyline(median: number[][], cx: number, cy: number, r: num
 }
 
 // Analytical intersection for line segment (p1-p2) and rect
+// 解析几何计算线段 (p1-p2) 与矩形四条边的精确交点。
+// 返回交点在线段上的比例 t (0 <= t <= 1)。
+// 用于精确切断中轴线。
 function getSegmentRectIntersections(p1: Point, p2: Point, rect: Rect): number[] {
     const tValues: number[] = [];
     const dx = p2.x - p1.x;
@@ -361,6 +400,13 @@ function getSegmentRectIntersections(p1: Point, p2: Point, rect: Rect): number[]
 }
 
 // Split a list of points (Polygon/Stroke Outline) by a rect
+// 核心算法：使用矩形分割多边形 (轮廓)
+// 流程：
+// 1. 遍历多边形的所有顶点，判断它们是否在矩形外。
+// 2. 如果点在矩形外，保留该点。
+// 3. 当遇到从“外”到“内”或从“内”到“外”的跨越时，计算线段与矩形的交点。
+// 4. 将这些交点添加进去，从而在矩形边界处形成一个平滑的“切口”。
+// 5. 最终返回被切断后形成的多个独立的多边形。
 export function splitPolygonByRect(points: Point[], rect: Rect): { path: string, points: Point[] }[] {
     if (points.length < 3) return [];
 
@@ -422,6 +468,13 @@ export function splitPolygonByRect(points: Point[], rect: Rect): { path: string,
 }
 
 // Split a polyline (Median) by a rect
+// 核心算法：使用矩形分割折线 (中轴线)
+// 流程：
+// 1. 遍历中轴线的每一条线段。
+// 2. 计算线段与矩形边界的交点 (tValues)。
+// 3. 将线段按交点打碎成更小的子线段。
+// 4. 检查每个子线段的中点是否在矩形内。
+// 5. 如果在矩形外，则保留；如果在矩形内，则丢弃，从而实现“切断”效果。
 export function splitPolylineByRect(median: number[][], rect: Rect): number[][][] {
     const segments: number[][][] = [];
     let currentSegment: number[][] = [];
