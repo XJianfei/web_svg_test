@@ -45,6 +45,7 @@ const getPointAtLength = (points: number[][], targetLen: number) => {
 const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAnimationEnd, onCanvasClick }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [activeStrokeIndex, setActiveStrokeIndex] = useState(-1);
+  const [mousePos, setMousePos] = useState<{x: number, y: number} | null>(null);
   
   // Animation state
   const startTimeRef = useRef<number | null>(null);
@@ -222,11 +223,48 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
 
     });
     
+    // 4. Draw Eraser Rect
+    if (mousePos && !isPlaying) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)'; // red-500 with opacity
+        ctx.lineWidth = 4;
+        const ERASER_SIZE_PIXELS = 20;
+        const SCALE_FACTOR = 1024 / 400; // Approx 2.56
+        const RECT_SIZE = ERASER_SIZE_PIXELS * SCALE_FACTOR * 1.5; // e.g. 76 units
+        ctx.strokeRect(mousePos.x - RECT_SIZE/2, mousePos.y - RECT_SIZE/2, RECT_SIZE, RECT_SIZE);
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.1)';
+        ctx.fillRect(mousePos.x - RECT_SIZE/2, mousePos.y - RECT_SIZE/2, RECT_SIZE, RECT_SIZE);
+        ctx.restore();
+    }
+
     ctx.restore();
     
     if (isPlaying) {
         reqIdRef.current = requestAnimationFrame(renderFrame);
     }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+    
+    const scaleX = CANVAS_SIZE / rect.width;
+    const scaleY = CANVAS_SIZE / rect.height;
+    
+    const canvasX = clientX * scaleX;
+    const canvasY = clientY * scaleY;
+
+    const dataX = canvasX;
+    const dataY = DATA_Y_OFFSET - canvasY;
+
+    setMousePos({ x: dataX, y: dataY });
+  };
+
+  const handleMouseLeave = () => {
+    setMousePos(null);
   };
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -278,6 +316,8 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
         style={{ width: '100%', maxWidth: `${VIEW_SIZE}px`, height: 'auto', display: 'block', margin: '0 auto' }}
         className="cursor-crosshair active:cursor-none"
         onClick={handleClick}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
       />
     </div>
   );
