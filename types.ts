@@ -15,4 +15,5 @@ export interface AnimationConfig {
   showMedians: boolean;
   showGrid: boolean;
   showOutline: boolean;
+  eraserSize: number;
 }

@@ -228,7 +228,7 @@ const HanziCanvas: React.FC<HanziCanvasProps> = ({ data, config, isPlaying, onAn
         ctx.save();
         ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)'; // red-500 with opacity
         ctx.lineWidth = 4;
-        const ERASER_SIZE_PIXELS = 20;
+        const ERASER_SIZE_PIXELS = config.eraserSize;
         const SCALE_FACTOR = 1024 / 400; // Approx 2.56
         const RECT_SIZE = ERASER_SIZE_PIXELS * SCALE_FACTOR * 1.5; // e.g. 76 units
         ctx.strokeRect(mousePos.x - RECT_SIZE/2, mousePos.y - RECT_SIZE/2, RECT_SIZE, RECT_SIZE);

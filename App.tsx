@@ -5,19 +5,20 @@ import Controls from './components/Controls';
 import KotlinCodeTab from './components/KotlinCodeTab';
 import { CHARACTER_DATA } from './constants';
 import { AnimationConfig, HanziData } from './types';
-import { dist, flattenSVGPath, splitPolygonByRect, splitPolylineByRect, isPointInPolygon, getPolygonCentroid } from './utils';
+import { dist, flattenSVGPath, splitPolygonByRectRobust, splitPolylineByRect, isPointInPolygon, getPolygonCentroid } from './utils';
 
 const App: React.FC = () => {
   // Initialize state with constant data
   const [hanziData, setHanziData] = useState<HanziData>(CHARACTER_DATA);
   
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [config, setConfig] = useState<AnimationConfig>({
     speed: 1,
     loop: true,
     showMedians: false,
     showGrid: true,
     showOutline: true,
+    eraserSize: 20,
   });
   
   const [activeTab, setActiveTab] = useState<'app' | 'kotlin'>('app');
@@ -41,7 +42,7 @@ const App: React.FC = () => {
   // Eraser Logic
   const handleCanvasClick = (x: number, y: number) => {
     // Eraser parameters
-    const ERASER_SIZE_PIXELS = 20;
+    const ERASER_SIZE_PIXELS = config.eraserSize;
     const SCALE_FACTOR = 1024 / 400; // Approx 2.56
     const RECT_SIZE = ERASER_SIZE_PIXELS * SCALE_FACTOR * 1.5; // e.g. 76 units
     const rect = {
@@ -75,7 +76,7 @@ const App: React.FC = () => {
             // 2. Split Outline
             // Use lower sample rate (higher resolution) to capture small tips accurately
             const polyPoints = flattenSVGPath(pathStr, 2); 
-            const splitOutlines = splitPolygonByRect(polyPoints, rect);
+            const splitOutlines = splitPolygonByRectRobust(polyPoints, rect);
 
             if (splitOutlines.length === 0 && splitMedians.length === 0) {
                 // Totally erased
@@ -87,73 +88,59 @@ const App: React.FC = () => {
             // The challenge is assigning a median to each outline.
             
             if (splitOutlines.length > 0) {
-                const usedMedians = new Set<number>();
-                
-                // Prepare to populate new strokes
                 hasChanged = true;
-
-                splitOutlines.forEach((outlineObj) => {
-                    // Strategy 1: Find a median that is "inside" this outline
-                    let bestMedianIdx = -1;
-                    let bestScore = -1; 
-
-                    splitMedians.forEach((m, mIdx) => {
-                        if (usedMedians.has(mIdx) && splitMedians.length >= splitOutlines.length) return; 
-                        
+                
+                // 1. Map each median to its best outline
+                const medianToOutline = new Map<number, number>();
+                splitMedians.forEach((m, mIdx) => {
+                    let bestOutlineIdx = -1;
+                    let bestScore = -1;
+                    
+                    splitOutlines.forEach((outlineObj, oIdx) => {
                         let insideCount = 0;
                         for(const pt of m) {
                             if (isPointInPolygon({x: pt[0], y: pt[1]}, outlineObj.points)) {
                                 insideCount++;
                             }
                         }
-                        
                         if (insideCount > bestScore) {
                             bestScore = insideCount;
-                            bestMedianIdx = mIdx;
+                            bestOutlineIdx = oIdx;
                         }
                     });
-
-                    if (bestMedianIdx !== -1 && bestScore > 0) {
-                        // Found a good match
-                        newStrokes.push(outlineObj.path);
-                        newMedians.push(splitMedians[bestMedianIdx]);
-                        usedMedians.add(bestMedianIdx);
+                    
+                    if (bestOutlineIdx !== -1 && bestScore > 0) {
+                        medianToOutline.set(mIdx, bestOutlineIdx);
                     } else {
-                        // Strategy 2: If no median is strictly inside (e.g. mismatch or small tip),
-                        // find the closest unused median centroid to the outline centroid.
-                        const outlineCentroid = getPolygonCentroid(outlineObj.points);
-                        
-                        let closestIdx = -1;
+                        // Fallback: closest centroid
+                        const mCentroid = { x: m[Math.floor(m.length/2)][0], y: m[Math.floor(m.length/2)][1] };
+                        let closestOIdx = -1;
                         let minDist = Number.MAX_VALUE;
-                        
-                        splitMedians.forEach((m, mIdx) => {
-                             if (usedMedians.has(mIdx) && splitMedians.length >= splitOutlines.length) return;
-                             
-                             // Approx median centroid
-                             const midPt = m[Math.floor(m.length/2)]; 
-                             const d = dist({x: midPt[0], y: midPt[1]}, outlineCentroid);
-                             if (d < minDist) {
-                                 minDist = d;
-                                 closestIdx = mIdx;
-                             }
+                        splitOutlines.forEach((outlineObj, oIdx) => {
+                            const d = dist(mCentroid, getPolygonCentroid(outlineObj.points));
+                            if (d < minDist) { minDist = d; closestOIdx = oIdx; }
                         });
-
-                        // Threshold for "closest" match - e.g. 100 units
-                        if (closestIdx !== -1 && minDist < 100) {
-                             newStrokes.push(outlineObj.path);
-                             newMedians.push(splitMedians[closestIdx]);
-                             usedMedians.add(closestIdx);
-                        } else {
-                             // Strategy 3: FALLBACK
-                             // The outline exists, but the median was likely fully erased (e.g. a tip).
-                             // We must create a dummy median so it renders.
-                             // A tiny segment at the centroid.
-                             const c = outlineCentroid;
-                             const dummyMedian = [[c.x, c.y], [c.x+0.1, c.y+0.1]];
-                             
-                             newStrokes.push(outlineObj.path);
-                             newMedians.push(dummyMedian);
+                        if (closestOIdx !== -1 && minDist < 100) {
+                            medianToOutline.set(mIdx, closestOIdx);
                         }
+                    }
+                });
+
+                // 2. For each outline, assign its medians
+                splitOutlines.forEach((outlineObj, oIdx) => {
+                    const assignedMedians = splitMedians.filter((_, mIdx) => medianToOutline.get(mIdx) === oIdx);
+                    
+                    if (assignedMedians.length > 0) {
+                        assignedMedians.forEach(m => {
+                            newStrokes.push(outlineObj.path);
+                            newMedians.push(m);
+                        });
+                    } else {
+                        // Fallback: Outline exists but no median assigned. Create a dummy median.
+                        const c = getPolygonCentroid(outlineObj.points);
+                        const dummyMedian = [[c.x, c.y], [c.x+0.1, c.y+0.1]];
+                        newStrokes.push(outlineObj.path);
+                        newMedians.push(dummyMedian);
                     }
                 });
                 

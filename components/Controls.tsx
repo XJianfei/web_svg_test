@@ -131,6 +131,22 @@ const Controls: React.FC<ControlsProps> = ({ isPlaying, onTogglePlay, onReset, c
         </div>
       </div>
 
+      {/* Eraser Size Control */}
+      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col space-y-2">
+        <div className="flex justify-between items-center">
+          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Eraser Size</span>
+          <span className="text-xs font-medium text-gray-600">{config.eraserSize}px</span>
+        </div>
+        <input
+          type="range"
+          min="5"
+          max="50"
+          value={config.eraserSize}
+          onChange={(e) => setConfig(prev => ({ ...prev, eraserSize: parseInt(e.target.value, 10) }))}
+          className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+        />
+      </div>
+
     </div>
   );
 };
