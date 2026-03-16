@@ -10,6 +10,8 @@ import { dist, flattenSVGPath, splitPolygonByRectRobust, splitPolylineByRect, is
 const App: React.FC = () => {
   // Initialize state with constant data
   const [hanziData, setHanziData] = useState<HanziData>(CHARACTER_DATA);
+  const [history, setHistory] = useState<HanziData[]>([CHARACTER_DATA]);
+  const [historyIndex, setHistoryIndex] = useState(0);
   
   const [isPlaying, setIsPlaying] = useState(false);
   const [config, setConfig] = useState<AnimationConfig>({
@@ -22,6 +24,43 @@ const App: React.FC = () => {
   });
   
   const [activeTab, setActiveTab] = useState<'app' | 'kotlin'>('app');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchCharacterData = async (char: string) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`https://cdn.jsdelivr.net/npm/hanzi-writer-data@2.0.1/${char}.json`);
+      if (!response.ok) throw new Error('Character not found');
+      const data = await response.json();
+      
+      // Transform data to our format
+      const newData: HanziData = {
+        character: char,
+        strokes: data.strokes,
+        medians: data.medians
+      };
+      
+      setHanziData(newData);
+      setHistory([newData]);
+      setHistoryIndex(0);
+      setIsPlaying(false);
+      setTimeout(() => setIsPlaying(true), 10);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load character');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (searchTerm.trim()) {
+      fetchCharacterData(searchTerm.trim()[0]);
+    }
+  };
 
   const handleAnimationEnd = () => {
     if (!config.loop) {
@@ -35,8 +74,29 @@ const App: React.FC = () => {
 
   const handleReset = () => {
     setHanziData(CHARACTER_DATA); // Reset to original
+    setHistory([CHARACTER_DATA]);
+    setHistoryIndex(0);
     setIsPlaying(false);
     setTimeout(() => setIsPlaying(true), 10);
+  };
+
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      const prevIndex = historyIndex - 1;
+      setHistoryIndex(prevIndex);
+      setHanziData(history[prevIndex]);
+      setIsPlaying(false);
+    }
+  };
+
+  const handleClear = () => {
+    const emptyData = { ...hanziData, strokes: [], medians: [] };
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(emptyData);
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+    setHanziData(emptyData);
+    setIsPlaying(false);
   };
 
   // Eraser Logic
@@ -157,11 +217,19 @@ const App: React.FC = () => {
     }
 
     if (hasChanged) {
-        setHanziData({
+        const newData = {
             ...hanziData,
             strokes: newStrokes,
             medians: newMedians
-        });
+        };
+        
+        // Update history
+        const newHistory = history.slice(0, historyIndex + 1);
+        newHistory.push(newData);
+        setHistory(newHistory);
+        setHistoryIndex(newHistory.length - 1);
+        
+        setHanziData(newData);
         setIsPlaying(false);
     }
   };
@@ -191,27 +259,58 @@ const App: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex space-x-4 mb-8">
-        <button
-          onClick={() => setActiveTab('app')}
-          className={`px-6 py-2 rounded-full font-medium transition-colors ${
-            activeTab === 'app'
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-          }`}
-        >
-          Interactive App
-        </button>
-        <button
-          onClick={() => setActiveTab('kotlin')}
-          className={`px-6 py-2 rounded-full font-medium transition-colors ${
-            activeTab === 'kotlin'
-              ? 'bg-blue-600 text-white shadow-md'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-          }`}
-        >
-          Kotlin Logic
-        </button>
+      <div className="flex flex-col items-center space-y-6 mb-8 w-full max-w-md">
+        
+        {/* Search Bar */}
+        <form onSubmit={handleSearch} className="w-full relative group">
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search character (e.g. 永, 和, 禅)"
+            className="w-full px-6 py-3 rounded-full bg-white border border-gray-200 shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all pr-12 text-gray-700"
+          />
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-blue-600 transition-colors"
+          >
+            {isLoading ? (
+              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            ) : (
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            )}
+          </button>
+          {error && <p className="absolute -bottom-6 left-6 text-xs text-red-500">{error}</p>}
+        </form>
+
+        <div className="flex space-x-4">
+          <button
+            onClick={() => setActiveTab('app')}
+            className={`px-6 py-2 rounded-full font-medium transition-colors ${
+              activeTab === 'app'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            Interactive App
+          </button>
+          <button
+            onClick={() => setActiveTab('kotlin')}
+            className={`px-6 py-2 rounded-full font-medium transition-colors ${
+              activeTab === 'kotlin'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            Kotlin Logic
+          </button>
+        </div>
       </div>
 
       {/* Main Content Card */}
@@ -240,19 +339,11 @@ const App: React.FC = () => {
                   <div className="flex items-baseline justify-between border-b border-gray-100 pb-4 mb-4">
                       <h2 className="text-6xl font-bold text-gray-800 font-serif">{hanziData.character}</h2>
                       <div className="text-right">
-                          <span className="block text-sm font-semibold text-gray-400 uppercase tracking-wide">Pinyin</span>
-                          <span className="text-2xl font-medium text-gray-700">jǔ</span>
+                          <span className="block text-sm font-semibold text-gray-400 uppercase tracking-wide">Strokes</span>
+                          <span className="text-2xl font-medium text-gray-700">{hanziData.strokes.length}</span>
                       </div>
                   </div>
                   <div className="space-y-2">
-                      <div className="flex justify-between text-sm">
-                          <span className="text-gray-500">Meaning</span>
-                          <span className="font-medium text-gray-800">To lift / To raise / To act</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                          <span className="text-gray-500">Strokes</span>
-                          <span className="font-medium text-gray-800">{hanziData.strokes.length}</span>
-                      </div>
                       <div className="mt-4 p-3 bg-yellow-50 text-yellow-800 text-xs rounded-md">
                           Tip: Click on a stroke to cut it into two separate strokes.
                       </div>
@@ -264,6 +355,9 @@ const App: React.FC = () => {
                   isPlaying={isPlaying} 
                   onTogglePlay={handleTogglePlay} 
                   onReset={handleReset}
+                  onUndo={handleUndo}
+                  onClear={handleClear}
+                  canUndo={historyIndex > 0}
                   config={config}
                   setConfig={setConfig}
                />
@@ -272,7 +366,7 @@ const App: React.FC = () => {
         </div>
       ) : (
         <div className="w-full max-w-4xl">
-          <KotlinCodeTab />
+          <KotlinCodeTab data={hanziData} />
         </div>
       )}
 

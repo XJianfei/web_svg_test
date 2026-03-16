@@ -5,11 +5,14 @@ interface ControlsProps {
   isPlaying: boolean;
   onTogglePlay: () => void;
   onReset: () => void;
+  onUndo: () => void;
+  onClear: () => void;
+  canUndo: boolean;
   config: AnimationConfig;
   setConfig: React.Dispatch<React.SetStateAction<AnimationConfig>>;
 }
 
-const Controls: React.FC<ControlsProps> = ({ isPlaying, onTogglePlay, onReset, config, setConfig }) => {
+const Controls: React.FC<ControlsProps> = ({ isPlaying, onTogglePlay, onReset, onUndo, onClear, canUndo, config, setConfig }) => {
   
   const toggleConfig = (key: keyof AnimationConfig) => {
     setConfig(prev => ({ ...prev, [key]: !prev[key] }));
@@ -27,10 +30,21 @@ const Controls: React.FC<ControlsProps> = ({ isPlaying, onTogglePlay, onReset, c
         <button
           onClick={onReset}
           className="p-3 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
-          title="Reset"
+          title="Reset to Original"
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+
+        <button
+          onClick={onUndo}
+          disabled={!canUndo}
+          className={`p-3 rounded-full transition-colors ${canUndo ? 'bg-gray-100 hover:bg-gray-200 text-gray-600' : 'bg-gray-50 text-gray-300 cursor-not-allowed'}`}
+          title="Undo"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
           </svg>
         </button>
 
@@ -51,6 +65,16 @@ const Controls: React.FC<ControlsProps> = ({ isPlaying, onTogglePlay, onReset, c
               <path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" />
             </svg>
           )}
+        </button>
+
+        <button
+          onClick={onClear}
+          className="p-3 rounded-full bg-red-50 hover:bg-red-100 text-red-600 transition-colors"
+          title="Clear All Strokes"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
         </button>
       </div>
 
