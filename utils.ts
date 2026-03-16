@@ -146,12 +146,14 @@ export function getPolygonCentroid(points: Point[]): Point {
 // 1. 解析 SVG 指令 (M, L, Q, C, Z)。
 // 2. 根据指定的采样率 (sampleRate)，将直线和贝塞尔曲线插值成一系列密集的点。
 // 3. 这样复杂的曲线轮廓就变成了一个简单的多边形，方便后续进行几何碰撞和裁剪计算。
-export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
+export function flattenSVGPath(d: string, sampleRate: number = 5): Point[][] {
   const commands = d.match(/[a-zA-Z]|[\-+]?(?:\d+\.?\d*|\.?\d+)/g);
   if (!commands) return [];
 
-  let points: Point[] = [];
+  const rings: Point[][] = [];
+  let currentRing: Point[] = [];
   let current: Point = { x: 0, y: 0 };
+  let subpathStart: Point = { x: 0, y: 0 };
   
   // Iterate through commands
   let i = 0;
@@ -160,13 +162,18 @@ export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
     if (isNaN(Number(cmd))) {
        switch(cmd.toUpperCase()) {
          case 'M': // Move to
+           if (currentRing.length > 0) {
+               rings.push(currentRing);
+               currentRing = [];
+           }
            current = { x: Number(commands[i+1]), y: Number(commands[i+2]) };
-           points.push({ ...current });
+           subpathStart = { ...current };
+           currentRing.push({ ...current });
            i += 3;
            break;
          case 'L': // Line to
            current = { x: Number(commands[i+1]), y: Number(commands[i+2]) };
-           points.push({ ...current });
+           currentRing.push({ ...current });
            i += 3;
            break;
          case 'Q': // Quadratic Bezier
@@ -181,7 +188,7 @@ export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
              const inv = 1 - ratio;
              const x = inv*inv*current.x + 2*inv*ratio*cp.x + ratio*ratio*ep.x;
              const y = inv*inv*current.y + 2*inv*ratio*cp.y + ratio*ratio*ep.y;
-             points.push({x, y});
+             currentRing.push({x, y});
            }
            current = ep;
            i += 5;
@@ -206,12 +213,14 @@ export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
                        (3 * inv*inv * ratio * cp1.y) + 
                        (3 * inv * ratio*ratio * cp2.y) + 
                        (ratio*ratio*ratio * epC.y);
-             points.push({x, y});
+             currentRing.push({x, y});
            }
            current = epC;
            i += 7;
            break;
           case 'Z': // Close path
+             currentRing.push({ ...subpathStart });
+             current = { ...subpathStart };
              i += 1;
              break;
           default:
@@ -221,7 +230,10 @@ export function flattenSVGPath(d: string, sampleRate: number = 5): Point[] {
       i++;
     }
   }
-  return points;
+  if (currentRing.length > 0) {
+      rings.push(currentRing);
+  }
+  return rings;
 }
 
 /**
@@ -516,15 +528,17 @@ export function splitPolygonByRect(points: Point[], rect: Rect): { path: string,
     }));
 }
 
-export function splitPolygonByRectRobust(points: Point[], rect: Rect): { path: string, points: Point[] }[] {
-    if (points.length < 3) return [];
+export function splitPolygonByRectRobust(rings: Point[][], rect: Rect): { path: string, points: Point[], ringCount: number, totalPoints: number }[] {
+    if (rings.length === 0 || rings[0].length < 3) return [];
 
     try {
-        const ring1 = points.map(p => [p.x, p.y] as [number, number]);
-        if (ring1.length > 0 && (ring1[0][0] !== ring1[ring1.length-1][0] || ring1[0][1] !== ring1[ring1.length-1][1])) {
-            ring1.push([ring1[0][0], ring1[0][1]]);
-        }
-        const poly1: polygonClipping.Polygon = [ring1];
+        const poly1: polygonClipping.Polygon = rings.map(ring => {
+            const r = ring.map(p => [p.x, p.y] as [number, number]);
+            if (r.length > 0 && (r[0][0] !== r[r.length-1][0] || r[0][1] !== r[r.length-1][1])) {
+                r.push([r[0][0], r[0][1]]);
+            }
+            return r;
+        });
 
         const rectRing: polygonClipping.Ring = [
             [rect.x, rect.y],
@@ -540,22 +554,33 @@ export function splitPolygonByRectRobust(points: Point[], rect: Rect): { path: s
         const result = [];
         for (const polygon of diff) {
             let pathStr = "";
+            let totalPoints = 0;
             for (const ring of polygon) {
                 const d = ring.map((p, i) => `${i===0 ? 'M' : 'L'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
                 pathStr += d + " Z ";
+                totalPoints += ring.length;
             }
             
             const exteriorPoints = polygon[0].map(p => ({ x: p[0], y: p[1] }));
             
             result.push({
                 path: pathStr.trim(),
-                points: exteriorPoints
+                points: exteriorPoints,
+                ringCount: polygon.length,
+                totalPoints: totalPoints
             });
         }
         return result;
     } catch (e) {
         console.error("Polygon clipping failed", e);
-        return [{ path: pointsToPath(points), points }];
+        // Fallback: just return the original rings as a path
+        let pathStr = "";
+        let totalPoints = 0;
+        for (const ring of rings) {
+            pathStr += pointsToPath(ring) + " ";
+            totalPoints += ring.length;
+        }
+        return [{ path: pathStr.trim(), points: rings[0], ringCount: rings.length, totalPoints }];
     }
 }
 

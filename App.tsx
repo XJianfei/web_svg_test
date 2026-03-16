@@ -5,7 +5,7 @@ import Controls from './components/Controls';
 import KotlinCodeTab from './components/KotlinCodeTab';
 import { CHARACTER_DATA } from './constants';
 import { AnimationConfig, HanziData } from './types';
-import { dist, flattenSVGPath, splitPolygonByRectRobust, splitPolylineByRect, isPointInPolygon, getPolygonCentroid } from './utils';
+import { dist, flattenSVGPath, splitPolygonByRectRobust, splitPolylineByRect, isPointInPolygon, getPolygonCentroid, isPointInRect } from './utils';
 
 const App: React.FC = () => {
   // Initialize state with constant data
@@ -116,29 +116,81 @@ const App: React.FC = () => {
     const newMedians: number[][][] = [];
     let hasChanged = false;
 
-    // Iterate through existing strokes
+    // Group strokes by outline path to prevent exponential duplication
+    const uniqueOutlines = new Map<string, number[][][]>();
     for (let i = 0; i < hanziData.strokes.length; i++) {
-        const median = hanziData.medians[i];
         const pathStr = hanziData.strokes[i];
+        const median = hanziData.medians[i];
+        if (!uniqueOutlines.has(pathStr)) {
+            uniqueOutlines.set(pathStr, []);
+        }
+        uniqueOutlines.get(pathStr)!.push(median);
+    }
 
-        // Check if click is near this stroke's median to save computation
+    // Iterate through unique outlines
+    for (const [pathStr, medians] of uniqueOutlines.entries()) {
+        // Check if click is near ANY of this outline's medians to save computation
         let minD = Number.MAX_VALUE;
-        for(const pt of median) {
-            const d = dist({x: pt[0], y: pt[1]}, {x, y});
-            if (d < minD) minD = d;
+        for (const median of medians) {
+            for(const pt of median) {
+                const d = dist({x: pt[0], y: pt[1]}, {x, y});
+                if (d < minD) minD = d;
+            }
         }
 
         // If close enough to possibly hit
         if (minD < 150 + RECT_SIZE) {
-            // 1. Split Median
-            const splitMedians = splitPolylineByRect(median, rect);
+            // 1. Split ALL Medians
+            const allSplitMedians: number[][][] = [];
+            let mediansChanged = false;
+            for (const median of medians) {
+                const splitMedians = splitPolylineByRect(median, rect);
+                if (splitMedians.length !== 1 || splitMedians[0].length !== median.length) {
+                    mediansChanged = true;
+                }
+                allSplitMedians.push(...splitMedians);
+            }
             
             // 2. Split Outline
             // Use lower sample rate (higher resolution) to capture small tips accurately
             const polyPoints = flattenSVGPath(pathStr, 2); 
             const splitOutlines = splitPolygonByRectRobust(polyPoints, rect);
 
-            if (splitOutlines.length === 0 && splitMedians.length === 0) {
+            let outlineChanged = false;
+            if (splitOutlines.length !== 1) {
+                outlineChanged = true;
+            } else {
+                const originalPointsCount = polyPoints.reduce((sum, ring) => sum + ring.length, 0);
+                if (splitOutlines[0].ringCount !== polyPoints.length) {
+                    outlineChanged = true;
+                } else if (Math.abs(splitOutlines[0].totalPoints - originalPointsCount) > 5) {
+                    outlineChanged = true;
+                } else {
+                    // Check if any point of polyPoints is inside rect
+                    let intersects = false;
+                    for (const ring of polyPoints) {
+                        for (const pt of ring) {
+                            if (isPointInRect(pt, rect)) {
+                                intersects = true;
+                                break;
+                            }
+                        }
+                        if (intersects) break;
+                    }
+                    if (intersects) outlineChanged = true;
+                }
+            }
+
+            if (!mediansChanged && !outlineChanged) {
+                // Nothing was actually erased
+                medians.forEach(m => {
+                    newStrokes.push(pathStr);
+                    newMedians.push(m);
+                });
+                continue;
+            }
+
+            if (splitOutlines.length === 0 && allSplitMedians.length === 0) {
                 // Totally erased
                 hasChanged = true;
                 continue;
@@ -152,7 +204,7 @@ const App: React.FC = () => {
                 
                 // 1. Map each median to its best outline
                 const medianToOutline = new Map<number, number>();
-                splitMedians.forEach((m, mIdx) => {
+                allSplitMedians.forEach((m, mIdx) => {
                     let bestOutlineIdx = -1;
                     let bestScore = -1;
                     
@@ -188,9 +240,12 @@ const App: React.FC = () => {
 
                 // 2. For each outline, assign its medians
                 splitOutlines.forEach((outlineObj, oIdx) => {
-                    const assignedMedians = splitMedians.filter((_, mIdx) => medianToOutline.get(mIdx) === oIdx);
+                    const assignedMedians = allSplitMedians.filter((_, mIdx) => medianToOutline.get(mIdx) === oIdx);
                     
                     if (assignedMedians.length > 0) {
+                        // Create a separate stroke for EACH assigned median!
+                        // Since we group by outline at the start, this won't cause exponential duplication.
+                        // It just means this outline is drawn multiple times, each time filling a different part.
                         assignedMedians.forEach(m => {
                             newStrokes.push(outlineObj.path);
                             newMedians.push(m);
@@ -211,8 +266,10 @@ const App: React.FC = () => {
 
         } else {
             // Too far, keep original
-            newStrokes.push(pathStr);
-            newMedians.push(median);
+            medians.forEach(m => {
+                newStrokes.push(pathStr);
+                newMedians.push(m);
+            });
         }
     }
 
